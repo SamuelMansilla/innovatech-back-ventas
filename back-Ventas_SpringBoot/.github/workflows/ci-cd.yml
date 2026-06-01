@@ -1,0 +1,54 @@
+name: Pipeline CI/CD Backend Ventas AWS ECR
+
+on:
+  push:
+    branches:
+      - deploy 
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout del código fuente
+        uses: actions/checkout@v3
+
+      - name: 2. Configurar credenciales de AWS Academy
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: 3. Iniciar sesión en Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: 4. Construir y subir imagen a Amazon ECR
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: 536888590851.dkr.ecr.us-east-1.amazonaws.com/innovatech-back-ventas:latest
+
+  deploy-to-private-ec2:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: 5. Desplegar usando EC2-Frontend como puente (Bastion)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: "10.0.160.179"       # IP Privada interna de tu máquina de Backend
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          proxy_host: "98.91.210.46" # IP Pública de tu Frontend (El Puente)
+          proxy_username: ec2-user
+          proxy_key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /home/ec2-user/app
+            # Autenticar el motor de Docker con tu cuenta de Amazon ECR en la máquina privada
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 536888590851.dkr.ecr.us-east-1.amazonaws.com
+            
+            # Forzar la descarga de la nueva imagen y reiniciar el contenedor de ventas amarrado al compose
+            docker compose pull back-ventas
+            docker compose up -d --remove-orphans back-ventas
